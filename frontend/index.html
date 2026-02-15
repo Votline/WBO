@@ -2,39 +2,126 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>{{ .title }}</title>
+    <title>Go-Webcam Multi-Stream</title>
     <style>
-        body { margin: 0; overflow: hidden; background: transparent; }
-        video {
-            width: 100vw;
-            height: 100vh;
-            object-fit: cover;
-            border-radius: 15px;
-            transform: scaleX(-1);
-        }
+        body { margin: 0; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; color: white; font-family: monospace;}
+        video { width: 100vw; height: 100vh; object-fit: cover; }
+        .mirror { transform: scaleX(-1); }
+        /* Кнопка запуска для мобилок, которые блокируют автоплей */
+        #playBtn { position: absolute; padding: 20px; background: rgba(0,0,0,0.5); border: 2px solid #fff; color: #fff; cursor: pointer; z-index: 10; display: none; }
     </style>
 </head>
 <body>
-    <video id="webcam" autoplay playsinline></video>
+    <div id="overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #111; z-index: 100; display: none; flex-direction: column; justify-content: center; align-items: center; cursor: pointer;">
+        <h1 style="color: white; font-family: sans-serif;">GO-WEBCAM</h1>
+        <p style="color: #888;">Нажми, чтобы запустить</p>
+    </div>
+
+    <video id="webcam" autoplay playsinline muted></video>
 
     <script>
         const video = document.getElementById('webcam');
-        async function initWebcam() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        width: { ideal: 1920 },
-                        height: { ideal: 1080 }
-                    },
-                    audio: false
-                });
-                video.srcObject = stream;
-            } catch (err) {
-                console.error("Ошибка доступа к вебке: ", err);
+        const overlay = document.getElementById('overlay');
+        const isSender = window.location.search.includes('stream');
+        const myID = Math.random().toString(36).substr(2, 9);
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+        let socket;
+        let localStream;
+        const peers = {};
+        let myPC;
+
+        if (isSender) {
+            video.classList.add('mirror');
+            overlay.style.display = 'flex';
+        }
+
+        function send(data) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(data));
             }
         }
 
-        initWebcam();
+        overlay.onclick = async () => {
+            overlay.style.display = 'none';
+            if (isSender) {
+                await startCamera();
+            }
+            if (!socket) connect();
+        };
+
+        async function startCamera() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1280, height: 720 },
+                    audio: false
+                });
+                video.srcObject = localStream;
+            } catch (e) {
+                alert("Ошибка камеры: " + e.message);
+            }
+        }
+
+        if (!isSender) {
+            connect();
+        }
+
+        async function handleViewerJoin(viewerID) {
+            const pc = new RTCPeerConnection(config);
+            peers[viewerID] = pc;
+            pc.onicecandidate = (e) => {
+                if (e.candidate) send({ target: viewerID, type: 'candidate', candidate: e.candidate });
+            };
+            if (localStream) {
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            }
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            send({ target: viewerID, type: 'offer', sdp: pc.localDescription });
+        }
+
+        async function handleOffer(sdp) {
+            if (myPC) myPC.close();
+            myPC = new RTCPeerConnection(config);
+            myPC.ontrack = (e) => {
+                video.srcObject = e.streams[0];
+                video.play().catch(() => {
+                    overlay.style.display = 'flex';
+                });
+            };
+            myPC.onicecandidate = (e) => {
+                if (e.candidate) send({ senderID: myID, type: 'candidate', candidate: e.candidate });
+            };
+            await myPC.setRemoteDescription(new RTCSessionDescription(sdp));
+            const answer = await myPC.createAnswer();
+            await myPC.setLocalDescription(answer);
+            send({ senderID: myID, type: 'answer', sdp: myPC.localDescription });
+        }
+
+        function connect() {
+            socket = new WebSocket('ws://' + location.host + '/ws');
+            socket.onopen = () => {
+                if (!isSender) send({ type: 'join', senderID: myID });
+            };
+            socket.onmessage = async (event) => {
+                const msg = JSON.parse(event.data);
+                if (isSender) {
+                    if (msg.type === 'join') handleViewerJoin(msg.senderID);
+                    if (msg.type === 'answer' && peers[msg.senderID]) {
+                        await peers[msg.senderID].setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                    }
+                    if (msg.type === 'candidate' && msg.senderID && peers[msg.senderID]) {
+                        await peers[msg.senderID].addIceCandidate(new RTCIceCandidate(msg.candidate));
+                    }
+                } else {
+                    if (msg.target !== myID) return;
+                    if (msg.type === 'offer') handleOffer(msg.sdp);
+                    if (msg.type === 'candidate' && myPC) {
+                        await myPC.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                    }
+                }
+            };
+        }
     </script>
 </body>
 </html>
