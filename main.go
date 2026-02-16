@@ -3,11 +3,11 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
 )
 
 //go:embed frontend/index.html
@@ -22,10 +22,6 @@ var (
 )
 
 func main() {
-	l, err := zap.NewDevelopment()
-	if err != nil {
-		panic(err)
-	}
 	r := http.NewServeMux()
 
 	upg = &websocket.Upgrader{
@@ -44,11 +40,9 @@ func main() {
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upg.Upgrade(w, r, nil)
 		if err != nil {
-			l.Error("WS upgrade failed", zap.Error(err))
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		defer conn.Close()
 
 		mu.Lock()
 		conns[conn] = true
@@ -67,7 +61,7 @@ func main() {
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				l.Error("Read message failed", zap.Error(err))
+				log.Println("Read message error: " + err.Error())
 				break
 			}
 
@@ -96,6 +90,6 @@ func main() {
 	}
 
 	if err := s.ListenAndServe(); err != nil {
-		l.Panic("Server run failed", zap.Error(err))
+		panic("Server run failed" + err.Error())
 	}
 }
