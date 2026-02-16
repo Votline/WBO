@@ -1,26 +1,32 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"net/http"
 	"sync"
 
-	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
 
+//go:embed frontend/index.html
+var indexHTML []byte
+
 var (
-	upg   = &websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
-	conns = make(map[*websocket.Conn]bool)
+
+	upg       = &websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	conns     = make(map[*websocket.Conn]bool)
 	lastOffer []byte
-	mu    sync.Mutex
+	mu        sync.Mutex
 )
 
 func main() {
 	l, err := zap.NewDevelopment()
-	if err != nil { panic(err) }
-	r := gin.Default()
+	if err != nil {
+		panic(err)
+	}
+	r := http.NewServeMux()
 
 	upg = &websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
@@ -30,27 +36,28 @@ func main() {
 
 	conns = make(map[*websocket.Conn]bool)
 
-	r.GET("/", func(ctx *gin.Context) {
-		ctx.File("frontend/index.html")
+	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(indexHTML)
 	})
 
-	r.GET("/ws", func(ctx *gin.Context) {
-		conn, err := upg.Upgrade(ctx.Writer, ctx.Request, nil)
+	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upg.Upgrade(w, r, nil)
 		if err != nil {
 			l.Error("WS upgrade failed", zap.Error(err))
-			http.Error(ctx.Writer, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		defer conn.Close()
 
 		mu.Lock()
 		conns[conn] = true
-		if lastOffer != nil && !ctx.Request.URL.Query().Has("stream") {
+		if lastOffer != nil && !r.URL.Query().Has("stream") {
 			conn.WriteMessage(websocket.TextMessage, lastOffer)
 		}
 		mu.Unlock()
 
-		defer func(){
+		defer func() {
 			mu.Lock()
 			delete(conns, conn)
 			mu.Unlock()
@@ -83,7 +90,12 @@ func main() {
 		}
 	})
 
-	if err := r.Run("0.0.0.0:8080"); err != nil {
+	s := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+	}
+
+	if err := s.ListenAndServe(); err != nil {
 		l.Panic("Server run failed", zap.Error(err))
 	}
 }
