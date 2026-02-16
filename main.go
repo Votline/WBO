@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -14,7 +15,6 @@ import (
 var indexHTML []byte
 
 var (
-
 	upg       = &websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	conns     = make(map[*websocket.Conn]bool)
 	lastOffer []byte
@@ -22,6 +22,13 @@ var (
 )
 
 func main() {
+	port := ""
+	if len(os.Args) < 2 {
+		port = ":8080"
+	} else {
+		port = ":" + os.Args[1]
+	}
+
 	r := http.NewServeMux()
 
 	upg = &websocket.Upgrader{
@@ -85,7 +92,7 @@ func main() {
 	})
 
 	s := &http.Server{
-		Addr:    ":8080",
+		Addr:    port,
 		Handler: r,
 	}
 
